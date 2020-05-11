@@ -10,12 +10,15 @@
 #include <stdio.h>
 #include <string.h>
 #include <limits.h>
+#include <unistd.h>
 #include "hidapi.h"
 #include "libmcp2221.h"
 
 #define UNUSED(var) ((void)(var))
 
+#ifndef DEBUG_INFO_HID
 #define DEBUG_INFO_HID	0
+#endif
 #define REPORT_SIZE		MCP2221_REPORT_SIZE
 #define HID_REPORT_SIZE	REPORT_SIZE + 1 // + 1 for report ID, which is always 0 for MCP2221
 
@@ -237,8 +240,11 @@ static mcp2221_error doTransaction(mcp2221_t* device, uint8_t* report)
 {
 	uint8_t type = report[0];
 	mcp2221_error res;
-	if((res = USBsend(device, report)) == MCP2221_SUCCESS)
-		res = getResponse(device, report, type);
+	if((res = USBsend(device, report)) == MCP2221_SUCCESS) {
+        // There is no response for the reset command
+        if (report[0] != USB_CMD_RESET)
+            res = getResponse(device, report, type);
+    }
 	return res;
 }
 
@@ -1315,7 +1321,7 @@ mcp2221_error LIB_EXPORT mcp2221_loadGPIOConf(mcp2221_t* device, mcp2221_gpiocon
 	return res;
 }
 
-mcp2221_error LIB_EXPORT mcp2221_i2cWrite(mcp2221_t* device, int address, void* data, int len, mcp2221_i2crw_t type)
+mcp2221_error LIB_EXPORT mcp2221_i2cWrite(mcp2221_t* device, int address, const void* data, int len, mcp2221_i2crw_t type)
 {
 	address <<= 1;
 
@@ -1412,6 +1418,9 @@ mcp2221_error LIB_EXPORT mcp2221_i2cCancel(mcp2221_t* device)
 	report[2] = 0x10;
 	res = doTransaction(device, report);
 	// TODO check response
+
+    usleep(1*1000); // wait 1ms for cancellation
+
 	return res;
 }
 
@@ -1436,7 +1445,10 @@ mcp2221_error LIB_EXPORT mcp2221_i2cDivider(mcp2221_t* device, int i2cdiv)
 	report[3] = 0x20;
 	report[4] = i2cdiv;
 	res = doTransaction(device, report);
-	// TODO check response
+    if (report[3] != 0x20) {
+        res = MCP2221_ERROR;
+    }
+
 	return res;
 }
 
@@ -1454,3 +1466,110 @@ mcp2221_error LIB_EXPORT mcp2221_i2cReadPins(mcp2221_t* device, mcp2221_i2cpins_
 	}
 	return res;
 }
+
+static mcp2221_error mcp2221_wait_state(mcp2221_t *device,
+                                        const mcp2221_i2c_state_t w_state)
+{
+    mcp2221_error res = MCP2221_SUCCESS;
+    mcp2221_i2c_state_t state = MCP2221_I2C_IDLE;
+    unsigned int count = 100;
+
+    do {
+        res = mcp2221_i2cState(device, &state);
+        if (res != MCP2221_SUCCESS) return res;
+        if (state == w_state)
+            return res;
+        usleep(10*1000);
+    } while (count--);
+
+    return MCP2221_TIMEOUT;
+}
+
+static inline mcp2221_error mcp2221_wait_data_ready(mcp2221_t *device)
+{
+    return mcp2221_wait_state(device, MCP2221_I2C_DATAREADY);
+}
+
+static inline mcp2221_error mcp2221_wait_idle(mcp2221_t *device)
+{
+    return mcp2221_wait_state(device, MCP2221_I2C_IDLE);
+}
+
+mcp2221_error LIB_EXPORT
+mcp2221_i2cWriteRead(mcp2221_t* device,
+                     const int address,
+                     const uint8_t *const w_buf,
+                     const unsigned int w_len,
+                     uint8_t *const r_buf,
+                     const unsigned int r_len)
+{
+    mcp2221_error res = MCP2221_SUCCESS;
+
+    if (!w_buf && !r_buf) return MCP2221_INVALID_ARG;
+
+    if (!w_buf || w_len == 0) { /* only read data */
+
+        if (r_len == 0) return MCP2221_SUCCESS; /* nothing to read */
+
+        if (!r_buf || r_len > 60) return MCP2221_INVALID_ARG;
+
+        res = mcp2221_wait_idle(device);
+        if (res != MCP2221_SUCCESS) return res;
+
+        res = mcp2221_i2cRead(device, address, r_len, MCP2221_I2CRW_NORMAL);
+        if (res != MCP2221_SUCCESS) return res;
+
+        res = mcp2221_i2cGet(device, r_buf, r_len);
+    }
+    else if (!r_buf || r_len == 0) { /* only write data */
+
+        if (w_len == 0) return MCP2221_SUCCESS; /* nothing to write */
+
+        if (!w_buf || w_len > 60) return MCP2221_INVALID_ARG;
+
+        res = mcp2221_wait_idle(device);
+        if (res != MCP2221_SUCCESS) return res;
+
+        res = mcp2221_i2cWrite(device, address, w_buf, w_len, MCP2221_I2CRW_NORMAL);
+    }
+    else {
+
+        if (w_len == 0 && r_len == 0)
+            return MCP2221_SUCCESS; /* nothing to write and nothing to read */
+
+        if (!r_buf || r_len > 60) return MCP2221_INVALID_ARG;
+        if (!w_buf || w_len > 60) return MCP2221_INVALID_ARG;
+
+        res = mcp2221_wait_idle(device);
+        if (res != MCP2221_SUCCESS) return res;
+
+        res = mcp2221_i2cWrite(device, address, w_buf, w_len, MCP2221_I2CRW_NOSTOP);
+        if (res != MCP2221_SUCCESS) return res;
+
+        res = mcp2221_wait_state(device, MCP2221_I2C_UNKNOWN2);
+        if (res != MCP2221_SUCCESS) return res;
+
+        res = mcp2221_i2cRead(device, address, r_len, MCP2221_I2CRW_REPEATED);
+        if (res != MCP2221_SUCCESS) return res;
+
+        res = mcp2221_wait_data_ready(device);
+        if (res != MCP2221_SUCCESS) return res;
+
+        res = mcp2221_i2cGet(device, r_buf, r_len);
+    }
+
+    return res;
+}
+
+/* *INDENT-OFF* */
+/******************************************************************************
+ * Local Variables:
+ * mode: C
+ * c-indent-level: 4
+ * c-basic-offset: 4
+ * tab-width: 4
+ * indent-tabs-mode: nil
+ * End:
+ * kate: space-indent on; indent-width 4; mixedindent off; indent-mode cstyle;
+ * vim: set expandtab filetype=c:
+ * vi: set et tabstop=4 shiftwidth=4: */

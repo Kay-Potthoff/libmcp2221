@@ -33,7 +33,8 @@ typedef enum
 	MCP2221_SUCCESS = 0,		/**< All is well */
 	MCP2221_ERROR = -1,			/**< General error */
 	MCP2221_INVALID_ARG = -2,	/**< Invalid argument supplied, probably a null pointer */
-	MCP2221_ERROR_HID = -3		/**< HIDAPI returned an error */
+	MCP2221_ERROR_HID = -3,		/**< HIDAPI returned an error */
+    MCP2221_TIMEOUT = -4        /**< Some action/access timed out without success */
 }mcp2221_error;
 
 /**
@@ -42,10 +43,28 @@ typedef enum
  */
 typedef enum
 {
-	MCP2221_I2C_IDLE = 0,
-	MCP2221_I2C_ADDRNOTFOUND = 37, // WR NACK
-	MCP2221_I2C_DATAREADY = 85,
-	MCP2221_I2C_UNKNOWN1 = 98 // stop timeout
+     MCP2221_I2C_IDLE               = 0,
+     MCP2221_RESP_NOERR             = 0x00,
+
+     MCP2221_RESP_I2C_START_TOUT    = 0x12,
+     MCP2221_RESP_I2C_RSTART_TOUT   = 0x17,
+     MCP2221_RESP_I2C_WRADDRL_WSEND = 0x21,
+     MCP2221_RESP_I2C_WRADDRL_TOUT  = 0x23,
+     MCP2221_I2C_ADDRNOTFOUND       = 37,
+     MCP2221_ADDR_NACK              = 0x25,
+     MCP2221_RESP_I2C_WRADDRL_NACK  = 0x25,
+
+     MCP2221_RESP_I2C_WRDATA_TOUT   = 0x44,
+     MCP2221_I2C_UNKNOWN2           = 0x45,     // 0100.0101 write no-stop
+     MCP2221_I2C_UNKNOWN4           = 80,       // 0101.0000 read busy/ongoing
+
+     MCP2221_RESP_I2C_RDDATA_TOUT   = 0x52,
+     MCP2221_I2C_DATAREADY          = 85,
+     MCP2221_RESP_READ_COMPL        = 0x55,
+
+     MCP2221_I2C_UNKNOWN3           = 96,
+     MCP2221_RESP_I2C_STOP_TOUT     = 0x62,
+     MCP2221_RESP_READ_ERR          = 0x7F,
 }mcp2221_i2c_state_t;
 
 /**
@@ -786,7 +805,7 @@ mcp2221_error mcp2221_loadGPIOConf(mcp2221_t* device, mcp2221_gpioconfset_t* con
 * @return ::mcp2221_error error code
 * @note I2C is not fully implemented yet
 */
-mcp2221_error mcp2221_i2cWrite(mcp2221_t* device, int address, void* data, int len, mcp2221_i2crw_t type);
+mcp2221_error mcp2221_i2cWrite(mcp2221_t* device, int address, const void* data, int len, mcp2221_i2crw_t type);
 
 /**
 * @brief Perform an I2C read
@@ -848,6 +867,24 @@ mcp2221_error mcp2221_i2cDivider(mcp2221_t* device, int i2cdiv);
 * @return ::mcp2221_error error code
 */
 mcp2221_error mcp2221_i2cReadPins(mcp2221_t* device, mcp2221_i2cpins_t* pins);
+
+/**
+ * @brief Perform an SMBus transaction on the I2C-bus
+ *
+ * @param [device] Device to operate on
+ * @param [address] Address of the device as 7-bit address
+ * @param [w_buf] buffer with data to write to the device
+ * @param [w_len] length of data in w_buf
+ * @param [r_buf] buffer which gets filled with data read from the device
+ * @param [r_len] length of data that should be read
+ * @return ::mcp2221_error error code
+ */
+mcp2221_error mcp2221_i2cWriteRead(mcp2221_t* device,
+                                   const int address,
+                                   const uint8_t *const w_buf,
+                                   const unsigned int w_len,
+                                   uint8_t *const r_buf,
+                                   const unsigned int r_len);
 
 #if defined(__cplusplus)
 }
