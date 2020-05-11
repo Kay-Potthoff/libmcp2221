@@ -1,0 +1,18 @@
+# SPDX-License-Identifier:    GPL-3.0
+# Copyright (C) 2020 MicroSys Electronics GmbH
+# Author: Kay Potthoff <kay.potthoff@microsys.de>
+
+option('hidapi-path',
+   type: 'string',
+   value: '',
+   description: 'Path where the repository of hidapi is located.')
+
+option('debug-info-hid',
+   type: 'boolean',
+   value: 'false',
+   description: 'Turn on debug print for libmcp.')
+
+option('with-examples',
+   type: 'boolean',
+   value: 'false',
+   description: 'Build examples')
